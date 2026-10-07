@@ -12,6 +12,7 @@ defmodule RealtimeWeb.BroadcastSingleControllerTest do
   alias Realtime.Database
   alias Realtime.FeatureFlags
   alias Realtime.GenCounter
+  alias Realtime.Messages
   alias Realtime.RateCounter
   alias Realtime.Tenants
   alias Realtime.Tenants.Authorization
@@ -777,6 +778,86 @@ defmodule RealtimeWeb.BroadcastSingleControllerTest do
 
       assert conn.status == 422
       assert Jason.decode!(conn.resp_body)["errors"]["persist"] == ["can only be used on private channels"]
+    end
+
+    test "persist[ttl] stores the message with that deadline", %{conn: conn, db_conn: db_conn} do
+      stub(GenCounter, :add, fn _ -> :ok end)
+
+      sub_topic = random_string()
+      event = random_string()
+
+      create_rls_policies(
+        db_conn,
+        [:authenticated_read_broadcast, :authenticated_write_broadcast, :authenticated_write_persistence],
+        %{topic: sub_topic}
+      )
+
+      sent_at = NaiveDateTime.utc_now()
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          Routes.broadcast_single_path(conn, :broadcast, sub_topic, event) <> "?private=true&persist[ttl]=3600",
+          %{"content" => "hello"}
+        )
+
+      assert conn.status == 202
+
+      assert_eventually(
+        {:ok, [%Message{topic: ^sub_topic, expires_at: expires_at}]} =
+          Repo.all(db_conn, messages_for(sub_topic), Message)
+      )
+
+      # An hour out, give or take the time the request itself took.
+      assert_in_delta NaiveDateTime.diff(expires_at, sent_at), 3600, 60
+    end
+
+    test "persist=true stores the message with the maximum retention", %{conn: conn, db_conn: db_conn} do
+      stub(GenCounter, :add, fn _ -> :ok end)
+
+      sub_topic = random_string()
+      event = random_string()
+
+      create_rls_policies(
+        db_conn,
+        [:authenticated_read_broadcast, :authenticated_write_broadcast, :authenticated_write_persistence],
+        %{topic: sub_topic}
+      )
+
+      sent_at = NaiveDateTime.utc_now()
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          Routes.broadcast_single_path(conn, :broadcast, sub_topic, event) <> "?private=true&persist=true",
+          %{"content" => "hello"}
+        )
+
+      assert conn.status == 202
+
+      assert_eventually({:ok, [%Message{expires_at: expires_at}]} = Repo.all(db_conn, messages_for(sub_topic), Message))
+
+      assert_in_delta NaiveDateTime.diff(expires_at, sent_at), Messages.max_ttl_seconds(), 60
+    end
+
+    test "rejects a ttl the server will not honor", %{conn: conn} do
+      stub(GenCounter, :add, fn _ -> :ok end)
+
+      for bad <- ["0", "-1", "1h", to_string(Messages.max_ttl_seconds() + 1)] do
+        conn =
+          conn
+          |> put_req_header("content-type", "application/json")
+          |> post(
+            Routes.broadcast_single_path(conn, :broadcast, random_string(), random_string()) <>
+              "?private=true&persist[ttl]=#{bad}",
+            %{"content" => "hello"}
+          )
+
+        assert conn.status == 422, "expected ttl #{bad} to be refused"
+        assert Jason.decode!(conn.resp_body)["message"] =~ "persist ttl must be a positive integer"
+      end
     end
   end
 

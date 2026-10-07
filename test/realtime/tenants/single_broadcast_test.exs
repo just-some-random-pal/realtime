@@ -444,7 +444,7 @@ defmodule Realtime.Tenants.SingleBroadcastTest do
       assert :ok =
                SingleBroadcast.broadcast(auth_params, tenant, topic, "event", payload, :json,
                  private: true,
-                 persist: true
+                 persist: %{ttl: 3600}
                )
 
       assert_eventually(
@@ -485,7 +485,7 @@ defmodule Realtime.Tenants.SingleBroadcastTest do
       assert :ok =
                SingleBroadcast.broadcast(auth_params, tenant, topic, "event", %{"a" => "b"}, :json,
                  private: true,
-                 persist: true
+                 persist: %{ttl: 3600}
                )
 
       # The policy denies persistence, so no task is spawned and there is nothing to wait for here
@@ -516,7 +516,9 @@ defmodule Realtime.Tenants.SingleBroadcastTest do
       topic = random_string()
 
       assert {:error, %Ecto.Changeset{errors: errors}} =
-               SingleBroadcast.broadcast(auth_params, tenant, topic, "event", %{"a" => "b"}, :json, persist: true)
+               SingleBroadcast.broadcast(auth_params, tenant, topic, "event", %{"a" => "b"}, :json,
+                 persist: %{ttl: 3600}
+               )
 
       assert {:persist, {"can only be used on private channels", []}} in errors
     end
@@ -540,7 +542,7 @@ defmodule Realtime.Tenants.SingleBroadcastTest do
       assert :ok =
                SingleBroadcast.broadcast(auth_params, tenant, topic, "event", binary, :binary,
                  private: true,
-                 persist: true
+                 persist: %{ttl: 3600}
                )
 
       assert_eventually(
